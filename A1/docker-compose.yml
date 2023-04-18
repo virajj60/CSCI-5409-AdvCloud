@@ -1,0 +1,29 @@
+version: "3"
+
+services:
+  container1:
+    image: virajjoshi/joshi_viraj_image1
+    container_name: container1
+    ports:
+      - '5000:5000'
+    volumes:
+      - .:/shared-volume
+    networks:
+      - ass1-network
+  container2:
+    image: virajjoshi/joshi_viraj_image2
+    container_name: container2
+    volumes:
+      - .:/shared-volume
+    networks:
+      - ass1-network
+
+networks:
+  ass1-network:
+    driver: bridge
+
+       
+      
+
+
+  

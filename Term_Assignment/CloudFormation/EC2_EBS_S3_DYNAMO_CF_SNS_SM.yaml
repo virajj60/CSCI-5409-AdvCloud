@@ -1,0 +1,198 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'Term Assignment yardsale.com'
+Parameters:
+  KeyName:
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+    Description: virajassignkeypair
+    Type: AWS::EC2::KeyPair::KeyName
+  SSHLocation:
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+    Default: 0.0.0.0/0
+    Description: The IP address range that can be used to SSH to the EC2 instances
+    MaxLength: '18'
+    MinLength: '9'
+    Type: String
+  awsAccessKeyId:
+    ConstraintDescription: must be a valid aws access key ID
+    Type: String
+  awsSecretAccessKey:
+    ConstraintDescription: must be a valid aws secret access key
+    Type: String 
+  awsSessionToken:
+     ConstraintDescription: must be a valid aws session token 
+     Type: String    
+Resources:
+  S3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName : yardsaletermassignmentvj
+      PublicAccessBlockConfiguration: 
+          BlockPublicAcls: false
+          IgnorePublicAcls: false
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Origins:
+          - DomainName: !GetAtt S3Bucket.DomainName
+            Id: !Ref S3Bucket
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        Enabled: 'true'
+        DefaultCacheBehavior:
+          TargetOriginId: !Ref S3Bucket
+          ViewerProtocolPolicy: allow-all
+          ForwardedValues:
+            QueryString: 'false'
+            Cookies:
+              Forward: none
+    DependsOn: S3Bucket
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "email"
+          AttributeType: "S"
+      KeySchema: 
+        - AttributeName: "email"
+          KeyType: "HASH"
+      TableClass: "STANDARD"
+      TableName: "users"
+      ProvisionedThroughput: 
+        ReadCapacityUnits: "5"
+        WriteCapacityUnits: "5"
+  PostsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "post_id"
+          AttributeType: "S"
+      KeySchema: 
+        - AttributeName: "post_id"
+          KeyType: "HASH" 
+      TableClass: "STANDARD"
+      TableName: "posts" 
+      ProvisionedThroughput: 
+        ReadCapacityUnits: "5"
+        WriteCapacityUnits: "5"
+  SNS:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: yardsale-email
+      TopicName: yardsale-notifications
+  EBSApplication:
+    Type: AWS::ElasticBeanstalk::Application
+    Properties:
+      Description: EBS Backend for yardsale
+  EBSApplicationVersion:
+    Type: AWS::ElasticBeanstalk::ApplicationVersion
+    Properties:
+      ApplicationName: !Ref EBSApplication
+      Description: EBS Backend for yardsale Version 1.0
+      SourceBundle:
+        S3Bucket:  "yardsale-backend"
+        S3Key: "csci5409-term-assignment-back.zip"
+  EBSConfigurationTemplate:
+    Type: AWS::ElasticBeanstalk::ConfigurationTemplate
+    Properties:
+      ApplicationName: !Ref EBSApplication
+      Description: EBS Backend for yardsale Configuration Template
+      OptionSettings:
+      - Namespace: aws:elasticbeanstalk:application:environment
+        OptionName: "aws_access_key_id"
+        Value: !Ref awsAccessKeyId  
+      - Namespace: aws:elasticbeanstalk:application:environment
+        OptionName: "aws_secret_access_key"
+        Value: !Ref awsSecretAccessKey
+      - Namespace: aws:elasticbeanstalk:application:environment
+        OptionName: "aws_session_token"
+        Value: !Ref awsSessionToken  
+      - Namespace: aws:elasticbeanstalk:application:environment
+        OptionName: "secret_name"
+        Value: "yardsale-secret"
+      - Namespace: aws:elasticbeanstalk:application:environment
+        OptionName: "s3_bucket_name"
+        Value: !Ref S3Bucket  
+      - Namespace: aws:autoscaling:launchconfiguration
+        OptionName: EC2KeyName   
+        Value: !Ref KeyName
+      - Namespace: aws:autoscaling:launchconfiguration
+        OptionName: IamInstanceProfile   
+        Value: !Ref MyInstanceProfile
+      SolutionStackName: 64bit Amazon Linux 2 v5.8.0 running Node.js 16
+    DependsOn: S3Bucket
+  EBSEnvironment:
+    Type: AWS::ElasticBeanstalk::Environment
+    Properties:
+      ApplicationName: !Ref EBSApplication
+      Description: EBS Backend for yardsale Environment
+      TemplateName: !Ref EBSConfigurationTemplate
+      VersionLabel: !Ref EBSApplicationVersion
+  MyInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: 
+      Path: "/"
+      Roles: ["LabRole"]
+  WebServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-00c39f71452c08778
+      InstanceType: t2.large
+      KeyName: 
+        Ref: KeyName
+      SecurityGroups:
+      - Ref: WebServerSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          curl -sL https://rpm.nodesource.com/setup_16.x | bash -
+          yum install nodejs -y
+          yum install unzip -y
+          yum install python3 -y
+          curl -O https://bootstrap.pypa.io/get-pip.py
+          python3 get-pip.py --user
+          export PATH=$PATH:/root/.local/bin
+          pip3 install awscli --upgrade --user
+          aws configure set aws_access_key_id ${awsAccessKeyId}
+          aws configure set aws_secret_access_key ${awsSecretAccessKey}
+          aws configure set aws_session_token ${awsSessionToken}
+          aws s3 cp s3://yardsale-frontend/csci5409-term-assignment-front.zip /home/ec2-user/
+          cd /home/ec2-user/
+          unzip csci5409-term-assignment-front.zip
+          rm csci5409-term-assignment-front.zip
+          echo -e "\nREACT_APP_CLOUDFRONT_DOMAIN_NAME=$(aws cloudfront get-distribution --id ${CloudFrontDistribution} --query 'Distribution.DomainName' --output text)" >> .env
+          echo -e "\nREACT_APP_BACKEND_URL=$(aws elasticbeanstalk describe-environments --environment-names ${EBSEnvironment} --query 'Environments[0].CNAME' --output text)" >> .env
+          sudo npm install
+          sudo npm start
+    DependsOn: [CloudFrontDistribution, EBSEnvironment]      
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Enable HTTP access via port 80,443 and SSH access"
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: 80
+        IpProtocol: tcp
+        ToPort: '80'
+      - CidrIp: 0.0.0.0/0
+        FromPort: 443
+        IpProtocol: tcp
+        ToPort: '443'
+      - CidrIp: !Ref SSHLocation
+        FromPort: '22'
+        IpProtocol: tcp
+        ToPort: '22'  
+      - CidrIp: 0.0.0.0/0
+        FromPort: 3000
+        IpProtocol: tcp
+        ToPort: '3000'   
+  SecretManager:
+    Type: 'AWS::SecretsManager::Secret'
+    Properties:
+      Name: yardsale-secret
+      Description: "Yardsale secrets"
+      SecretString: !Sub |
+        {"aws_access_key_id":"${awsAccessKeyId}","aws_secret_access_key":"${awsSecretAccessKey}","aws_session_token":"${awsSessionToken}","snsTopicArn":"${SNS}"}
+    DependsOn: SNS
